@@ -218,7 +218,16 @@ class SAPODataSession:
             headers.update(extra_headers)
 
         is_metadata = path.strip().lower() == "$metadata"
-        q = None if is_metadata else self._params(params, sap_client, include_format=True, include_client=True)
+        if is_metadata:
+            headers["Accept"] = "application/xml"
+
+        # IMPORTANT:
+        # - For $metadata: do NOT send $format=json (metadata is XML),
+        #   but DO send sap-client if configured.
+        if is_metadata:
+            q = self._params(params, sap_client, include_format=False, include_client=True)
+        else:
+            q = self._params(params, sap_client, include_format=True, include_client=True)
 
         r = self._request("GET", url, params=q, headers=headers)
         return self._json_or_text(r)
@@ -238,30 +247,39 @@ class SAPODataSession:
             headers.update(extra_headers)
 
         is_metadata = path.strip().lower() == "$metadata"
-        q = None if is_metadata else self._params(params, sap_client, include_format=False, include_client=True)
+        q = self._params(params, sap_client, include_format=False, include_client=True)
 
         r = self._request("GET", url, params=q, headers=headers)
         return r.text
 
-    def _ensure_csrf(self, service: str) -> None:
-        if service in self._csrf_tokens:
+    def _ensure_csrf(self, service: str, *, sap_client: Optional[str] = None) -> None:
+        key = f"{service}::{sap_client or self.cfg.default_sap_client or ''}"
+        if key in self._csrf_tokens:
             return
+
         with self._csrf_lock:
-            if service in self._csrf_tokens:
+            if key in self._csrf_tokens:
                 return
+
             url = self._url(service, "$metadata")
             headers = dict(self.session.headers)
             headers["X-CSRF-Token"] = "Fetch"
-            r = self._request("GET", url, params=None, headers=headers)  # NO params on $metadata
+
+            # Include sap-client; do not include $format
+            q = self._params({}, sap_client, include_format=False, include_client=True)
+
+            r = self._request("GET", url, params=q, headers=headers)
             token = r.headers.get("x-csrf-token")
             if not token:
                 raise ODataUpstreamError(400, "Failed to obtain CSRF token", url, dict(r.headers))
-            self._csrf_tokens[service] = token
+
+            self._csrf_tokens[key] = token
 
     def post(self, service: str, entity_set: str, payload: Dict[str, Any], *, sap_client: Optional[str] = None) -> Dict[str, Any]:
-        self._ensure_csrf(service)
+        self._ensure_csrf(service, sap_client=sap_client)
         url = self._url(service, entity_set)
-        headers = {"X-CSRF-Token": self._csrf_tokens[service], "Content-Type": "application/json"}
+        key = f"{service}::{sap_client or self.cfg.default_sap_client or ''}"
+        headers = {"X-CSRF-Token": self._csrf_tokens[key], "Content-Type": "application/json"}
         r = self._request("POST", url, params=self._params({}, sap_client), headers=headers, data=json.dumps(payload, separators=(",", ":")))
         try:
             return r.json()

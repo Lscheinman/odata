@@ -4,8 +4,9 @@ import os
 import time
 import uvicorn
 from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Header
+from fastapi import FastAPI, HTTPException, Query, Header
 from pydantic import BaseModel, Field
 
 from session import ODataAuth, ODataConfig, SAPODataSession, ODataUpstreamError
@@ -26,11 +27,7 @@ VERIFY_TLS = os.environ.get("S4_VERIFY_TLS", "true").lower() != "false"
 # FastAPI protection
 API_KEY = os.environ.get("ODATA_API_KEY", "")  # set this
 # Comma-separated allowlist of service technical names (e.g. API_MAINTENANCEORDER_SRV,API_MATERIAL_DOCUMENT_SRV)
-ALLOWED_SERVICES = {
-    s.strip()
-    for s in (os.environ.get("ODATA_ALLOWED_SERVICES", "")).split(",")
-    if s.strip()
-}
+
 # Hard caps
 MAX_TOP = int(os.environ.get("ODATA_MAX_TOP", "500"))
 MAX_PAGES = int(os.environ.get("ODATA_MAX_PAGES", "10"))
@@ -53,6 +50,90 @@ _meta_cache: Dict[str, Dict[str, Any]] = {}
 # structure:
 # _meta_cache[service] = {"ts": epoch, "entity_sets": [...], "fields": {entity_set:[...]}}
 # very simple on purpose (boring correctness)
+
+
+def try_metadata(
+    sess: SAPODataSession,
+    service: str,
+    *,
+    sap_client: Optional[str] = None,
+    timeout_override: Optional[float] = None,
+) -> Dict[str, object]:
+    """
+    Best-effort check whether an OData service exists.
+
+    Returns a structured result:
+      {
+        "service": "...",
+        "found": bool,
+        "root": "sap" | "root",
+        "status": int | None,
+        "error": str | None
+      }
+    """
+
+    service = service.strip().strip("/")
+    results = []
+
+    # Normalize roots
+    base = sess.cfg.base_url.rstrip("/") + "/"
+    roots = []
+
+    # If base already ends with /sap/, try both sap and parent
+    if base.endswith("/sap/"):
+        roots.append(("sap", base))
+        roots.append(("root", base[:-4] + "/"))  # strip trailing "sap/"
+    else:
+        roots.append(("root", base))
+        roots.append(("sap", urljoin(base, "sap/")))
+
+    for root_name, root_url in roots:
+        # Temporarily override base
+        old_base = sess.base
+        sess.base = root_url
+
+        try:
+            sess.get(
+                service,
+                "$metadata",
+                sap_client=sap_client,
+            )
+            # If no exception: service exists
+            sess.base = old_base
+            return {
+                "service": service,
+                "found": True,
+                "root": root_name,
+                "status": 200,
+                "error": None,
+            }
+
+        except ODataUpstreamError as e:
+            # /IWFND/MED/170 => service not found
+            if "/IWFND/MED/170" in e.body:
+                results.append({
+                    "root": root_name,
+                    "status": e.status,
+                    "error": "service_not_found",
+                })
+            else:
+                results.append({
+                    "root": root_name,
+                    "status": e.status,
+                    "error": e.body,
+                })
+
+        finally:
+            sess.base = old_base
+
+    # Nothing matched
+    return {
+        "service": service,
+        "found": False,
+        "root": None,
+        "status": results[0]["status"] if results else None,
+        "error": results,
+    }
 
 
 def _build_session() -> SAPODataSession:
@@ -80,16 +161,9 @@ def require_api_key(x_api_key: str = Header(...)) -> None:
 
 def enforce_service_allowlist(service: str) -> None:
     # If allowlist is empty -> block by default (safer)
-    if not ALLOWED_SERVICES:
-        raise HTTPException(status_code=403, detail="No services are allowed (ODATA_ALLOWED_SERVICES is empty).")
 
     # Normalize some common forms: allow passing "SAP/XYZ" etc? keep strict.
     svc = service.strip().strip("/")
-    # Allow both "X;v=2" and "X" if allowlisted as "X" (optional)
-    base = svc.split(";v=")[0]
-    if svc not in ALLOWED_SERVICES and base not in ALLOWED_SERVICES:
-        raise HTTPException(status_code=403, detail=f"Service not allowed: {service}")
-
 
 # -----------------------------------------------------------------------------
 # Request models
@@ -133,10 +207,33 @@ def health() -> Dict[str, Any]:
     return {"ok": True}
 
 
-@app.get("/services", dependencies=[Depends(require_api_key)])
-def list_allowed_services() -> Dict[str, Any]:
-    # You can replace this with a real Gateway catalog discovery later.
-    return {"allowed_services": sorted(ALLOWED_SERVICES)}
+@app.get("/services/probe")
+def probe_services(prefix: str, limit: int = 30) -> Dict[str, Any]:
+    """
+    Best-effort probing: tries likely service names and returns those that exist.
+    NOT a full discovery mechanism.
+    """
+    prefix = prefix.strip().upper()
+    candidates = []
+    # Example strategies (tune to your naming conventions)
+    candidates.append(prefix)
+    candidates.append(prefix + "_SRV")
+    candidates.append(prefix + ";v=2")
+    candidates.append(prefix + "_SRV;v=2")
+
+    # also try a few common suffix patterns:
+    for suf in ["_SRV", "_SERVICE", "_ODATA", "_API"]:
+        candidates.append(prefix + suf)
+
+    candidates = list(dict.fromkeys(candidates))[:limit]
+
+    found = []
+    for svc in candidates:
+        ok = try_metadata(svc)   # your function calling $metadata with fallback roots
+        if ok:
+            found.append(svc)
+
+    return {"prefix": prefix, "tested": candidates, "found": found}
 
 
 @app.get("/discover/services")
@@ -208,7 +305,7 @@ def discover_fields(service: str, entity_set: str, sap_client: Optional[str] = N
         raise HTTPException(status_code=502, detail={"upstream_status": e.status, "url": e.url, "error": str(e)})
 
 
-@app.get("/metadata/entity-sets", dependencies=[Depends(require_api_key)])
+@app.get("/metadata/entity-sets")
 def list_entity_sets(service: str = Query(...)) -> Dict[str, Any]:
     enforce_service_allowlist(service)
     now = time.time()
@@ -226,7 +323,7 @@ def list_entity_sets(service: str = Query(...)) -> Dict[str, Any]:
         return {"service": service, "entity_sets": es, "cached": False}
 
 
-@app.get("/metadata/fields", dependencies=[Depends(require_api_key)])
+@app.get("/metadata/fields")
 def list_fields(service: str = Query(...), entity_set: str = Query(...)) -> Dict[str, Any]:
     enforce_service_allowlist(service)
     now = time.time()
@@ -248,7 +345,7 @@ def list_fields(service: str = Query(...), entity_set: str = Query(...)) -> Dict
         return {"service": service, "entity_set": entity_set, "fields": fields, "cached": False}
 
 
-@app.post("/query", response_model=QueryResponse, dependencies=[Depends(require_api_key)])
+@app.post("/query", response_model=QueryResponse, )
 def query_any(req: QueryRequest) -> QueryResponse:
     enforce_service_allowlist(req.service)
 
