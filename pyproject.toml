@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sap-ds"
+version = "0.1.0"
+description = "SAP S/4HANA Defense & Security Python SDK"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+authors = [
+    {name = "SAP Defense & Security Team"}
+]
+keywords = [
+    "SAP",
+    "S/4HANA",
+    "OData",
+    "Defense",
+    "Security",
+    "Force Elements",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "requests>=2.28.0",
+    "urllib3>=1.26.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "pydantic>=2.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+    "responses>=0.23.0",
+]
+all = [
+    "sap-ds[api,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/sap/sap-ds-python"
+Documentation = "https://github.com/sap/sap-ds-python#readme"
+Repository = "https://github.com/sap/sap-ds-python"
+Issues = "https://github.com/sap/sap-ds-python/issues"
+
+[project.scripts]
+sap-ds-api = "sap_ds.api.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sap_ds*"]
+
+[tool.setuptools.package-data]
+sap_ds = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]

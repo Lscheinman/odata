@@ -3,8 +3,18 @@ from __future__ import annotations
 import os
 import time
 import uvicorn
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
+
+# Load .env file
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).resolve().parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    pass
 
 from fastapi import FastAPI, HTTPException, Query, Header
 from pydantic import BaseModel, Field

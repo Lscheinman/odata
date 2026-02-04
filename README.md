@@ -1,182 +1,145 @@
-# Generic SAP OData Proxy (FastAPI)
+# SAP Defense & Security Python SDK (`sap_ds`)
 
-This project exposes a **generic, schema-agnostic HTTP API** for querying SAP OData services.
-It does **not** hardcode entity sets, fields, or services. Where SAP allows it, metadata is discovered dynamically.
+A modular Python package for SAP S/4HANA integration, focusing on Defense & Security domain functionality alongside generic OData access. Designed to be imported and used like `hana_ml`.
 
-The proxy is designed for:
-- debugging
-- analytics
-- agents (LLMs, planners, maintenance copilots)
-- internal tooling
+## Features
 
-⚠️ This is a **power tool**. Treat access accordingly.
+- ✅ **Generic OData Access** - Query any SAP OData service
+- ✅ **Force Elements** - Full support for SAP D&S Force Element operations
+- ✅ **REST API Gateway** - Optional FastAPI-based REST gateway with Swagger UI
+- ✅ **Draft-Enabled Entity Support** - Properly handles SAP draft entities
+- ✅ **Metadata Caching** - Efficient $metadata caching with configurable TTL
+- ✅ **Hierarchical Queries** - Tree and graph operations for Force Elements
 
----
-
-## 1. Prerequisites
-
-- Python **3.10+**
-- Network access to your SAP system
-- An SAP user with OData authorization
-- (Optional) VPN access to SAP
-
----
-
-## 2. Project layout (minimal)
-
-```
-.
-├── main.py
-├── client_odata.py
-├── session_odata.py
-├── requirements.txt
-├── .env.example
-└── README.md
-```
-
----
-
-## 3. Install dependencies
-
-Create a virtual environment:
+## Installation
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+# Install in development mode
+pip install -e ".[all]"
+
+# Or just the core (no API dependencies)
+pip install -e .
 ```
 
-Install requirements:
+## Quick Start
+
+### As a Python Library
+
+```python
+from sap_ds import ConnectionContext, ODataService
+from sap_ds.defense import ForceElementClient
+
+# Using environment variables from .env
+with ConnectionContext() as conn:
+    # Generic OData query
+    service = conn.get_service("API_MAINTENANCEORDER_SRV")
+    orders = service.query("A_MaintenanceOrder", top=10)
+    
+    # Force Elements
+    force = ForceElementClient(conn)
+    elements = force.get_force_elements(top=100)
+    tree = force.get_tree("50000027", depth=3)
+```
+
+### As a REST API
 
 ```bash
-pip install -r requirements.txt
+# Start the API server
+python -m sap_ds.api
+
+# Or with uvicorn directly
+uvicorn sap_ds.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
----
+Then open http://localhost:8000/docs for Swagger UI.
 
-## 4. Environment configuration
+## Configuration
 
-Copy the example env file:
-
-```bash
-cp .env.example .env
-```
-
-### Example `.env.example`
+Create a `.env` file in your project root:
 
 ```env
-SAP_ODATA_BASE_URL=https://your-sap-host/sap/opu/odata/sap/
-SAP_CLIENT=100
+# SAP OData Connection
+S4_BASE_URL="https://your-sap-system.com/sap/opu/odata/sap"
+S4_USER="YOUR_USER"
+S4_PASS="YOUR_PASSWORD"
+S4_SAP_CLIENT=100
 
-SAP_USERNAME=YOUR_SAP_USERNAME
-SAP_PASSWORD=YOUR_SAP_PASSWORD
+# Optional Settings
+ODATA_MAX_TOP=500
+ODATA_MAX_PAGES=5
+ODATA_META_TTL=900
+ODATA_TIMEOUT=60
 
-FASTAPI_HOST=0.0.0.0
-FASTAPI_PORT=8000
-
-ODATA_PROXY_API_KEY=
+# API Gateway Security
+ODATA_API_KEY="your-secure-api-key"
 ```
 
-Notes:
-- `ODATA_PROXY_API_KEY` protects **this proxy**, not SAP.
-- Leave it empty for local debugging.
+## Package Structure
 
----
+```
+sap_ds/
+├── core/              # Connection, session, authentication
+│   ├── connection.py  # ConnectionContext manager
+│   └── session.py     # HTTP session with SAP auth
+├── odata/             # Generic OData operations
+│   ├── service.py     # ODataService class
+│   └── metadata.py    # Metadata parsing & caching
+├── defense/           # Defense & Security domain
+│   ├── base.py        # Base defense service
+│   └── force_elements/  # Force Element operations
+│       ├── client.py  # Main ForceElementClient
+│       ├── tree.py    # Hierarchical tree builder
+│       ├── graph.py   # Network graph operations
+│       └── readiness.py # Readiness calculations
+└── api/               # REST API Gateway
+    ├── gateway.py     # FastAPI application
+    └── models.py      # Pydantic request/response models
+```
 
-## 5. Starting the server (debug mode)
+## API Endpoints
 
-Run:
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/force-elements` | GET | List force elements |
+| `/force-elements/{id}` | GET | Get single force element |
+| `/force-elements/tree` | POST | Build hierarchy tree |
+| `/force-elements/graph` | POST | Get network graph |
+| `/force-elements/readiness` | POST | Get readiness data |
+| `/query` | POST | Generic OData query |
+| `/discover/entity-sets` | GET | List available entity sets |
+| `/discover/fields` | GET | List fields for an entity |
+
+## Tested Force Element IDs
+
+The following IDs are confirmed working in the sandbox:
+
+| ID | Name |
+|----|------|
+| 50000026 | World |
+| 50000027 | SandBox Org Structure |
+| 50000028 | SandBox 1st DIV |
+| 50000029 | SandBox 2nd DIV |
+| 50000030 | Sandbox TRANSCOM Unit |
+
+## Development
 
 ```bash
-python main.py
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate
+
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/
+
+# Start API in development mode
+uvicorn sap_ds.api:app --reload
 ```
 
-Swagger UI:
+## License
 
-```
-http://localhost:8000/docs
-```
+Internal SAP use only.
 
----
-
-## 6. Core API endpoints
-
-### Query any entity set
-
-```
-GET /odata/{service}/{entity_set}
-```
-
-Example:
-
-```
-GET /odata/API_EQUIPMENT/EquipmentSet?$top=5
-```
-
----
-
-### Discover entity sets in a service
-
-```
-GET /discover/entity-sets?service=API_EQUIPMENT
-```
-
----
-
-### Discover fields for an entity set
-
-```
-GET /discover/fields?service=API_EQUIPMENT&entity_set=EquipmentSet
-```
-
----
-
-### Discover all services (best-effort)
-
-```
-GET /discover/services
-```
-
-This may fail depending on SAP system configuration. This is normal.
-
----
-
-## 7. Authentication model
-
-### SAP authentication
-Handled internally (cookies, CSRF, session reuse).
-
-### Proxy authentication (optional)
-If `ODATA_PROXY_API_KEY` is set, clients must send:
-
-```
-X-API-Key: <value>
-```
-
----
-
-## 8. What this proxy does NOT do
-
-- No schema invention
-- No caching
-- No business logic
-- No authorization bypass
-
-It is transparent plumbing.
-
----
-
-## 9. Security warning
-
-Do not expose publicly without:
-- API key
-- HTTPS
-- Read-only SAP user
-- Rate limiting
-
----
-
-## 10. Next steps
-
-- Safe query mode
-- Metadata caching
-- LLM-oriented query validation
